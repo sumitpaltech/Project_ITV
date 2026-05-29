@@ -4,7 +4,6 @@ pipeline {
     environment {
         APP_NAME     = 'taskapp'
         DOCKER_IMAGE = "sumitpaltech/taskapp"
-        IMAGE_TAG    = "${env.GIT_COMMIT?.take(7)}-${env.BUILD_NUMBER}"
     }
 
     options {
@@ -107,12 +106,16 @@ pipeline {
             steps {
                 echo "🚀 Deploying to Kubernetes (staging)..."
 
-                withCredentials([file(credentialsId: 'kubeconfig.yaml (Minikube kubeconfig)', variable: 'KUBECONFIG')]) {
+                withCredentials([file(
+                    credentialsId: 'Minikube kubeconfig',
+                    variable: 'KUBECONFIG'
+                )]) {
 
                     sh """
                         kubectl set image deployment/taskapp-deployment \
                             taskapp=${DOCKER_IMAGE}:${IMAGE_TAG} \
-                            -n staging
+                            -n staging \
+                            --record
 
                         kubectl rollout status deployment/taskapp-deployment \
                             -n staging --timeout=300s
@@ -133,14 +136,18 @@ pipeline {
             steps {
                 echo "🚀 Deploying to production..."
 
-                withCredentials([file(credentialsId: 'kubeconfig.yaml (Minikube kubeconfig)', variable: 'KUBECONFIG')]) {
+                withCredentials([file(
+                    credentialsId: 'Minikube kubeconfig',
+                    variable: 'KUBECONFIG'
+                )]) {
 
                     sh """
                         kubectl apply -f k8s/ -n production
 
                         kubectl set image deployment/taskapp-deployment \
                             taskapp=${DOCKER_IMAGE}:${IMAGE_TAG} \
-                            -n production
+                            -n production \
+                            --record
 
                         kubectl rollout status deployment/taskapp-deployment \
                             -n production --timeout=300s
