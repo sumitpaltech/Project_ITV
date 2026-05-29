@@ -59,7 +59,11 @@ pipeline {
             steps {
                 echo '📦 Installing Composer dependencies...'
                 sh '''
-                    cp .env.example .env
+                    if [ -f .env.example ]; then
+                        cp .env.example .env
+                    else
+                        echo ".env.example not found, skipping"
+                    fi
                     composer install --no-interaction --prefer-dist --optimize-autoloader
                     php artisan key:generate
                 '''
