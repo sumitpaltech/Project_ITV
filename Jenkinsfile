@@ -57,15 +57,22 @@ pipeline {
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         stage('Install Dependencies') {
             steps {
-                echo '📦 Installing Composer dependencies...'
+                echo '📦 Installing dependencies...'
                 sh '''
+                    if [ -f composer.json ]; then
+                        if command -v composer >/dev/null 2>&1; then
+                            composer install --no-interaction --prefer-dist --optimize-autoloader
+                        else
+                            echo "❌ Composer not installed in Jenkins"
+                            exit 1
+                        fi
+                    fi
+
                     if [ -f .env.example ]; then
                         cp .env.example .env
                     else
-                        echo ".env.example not found, skipping"
+                        echo "⚠️ .env.example not found, skipping"
                     fi
-                    composer install --no-interaction --prefer-dist --optimize-autoloader
-                    php artisan key:generate
                 '''
             }
         }
@@ -125,16 +132,15 @@ pipeline {
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         stage('Docker Build') {
             steps {
-                echo "🐳 Building image: ${DOCKER_IMAGE}:${IMAGE_TAG}"
-                sh """
-                    docker build \
-                        --build-arg BUILD_DATE=\$(date -u +%Y-%m-%dT%H:%M:%SZ) \
-                        --build-arg VCS_REF=${env.GIT_COMMIT?.take(8) ?: 'unknown'} \
-                        --cache-from ${DOCKER_IMAGE}:latest \
-                        -t ${DOCKER_IMAGE}:${IMAGE_TAG} \
-                        -t ${DOCKER_IMAGE}:latest \
-                        -f Dockerfile .
-                """
+                script {
+                    if (sh(script: 'command -v docker', returnStatus: true) == 0) {
+                        sh """
+                            docker build -t ${DOCKER_IMAGE}:${IMAGE_TAG} .
+                        """
+                    } else {
+                        error "Docker not available in Jenkins"
+                    }
+                }
             }
         }
 
@@ -163,19 +169,18 @@ pipeline {
             steps {
                 echo "🚀 Deploying ${IMAGE_TAG} to STAGING..."
                 withEnv(["KUBECONFIG=${env.WORKSPACE}/kubeconfig"]) {
-                    withCredentials([file(credentialsId: 'kubeconfig-credentials', variable: 'KUBECONFIG_FILE')]) {
-                        sh """
-                            cp \$KUBECONFIG_FILE \$KUBECONFIG
+                    withCredentials([file(credentialsId: 'kubeconfig-credentials', variable: 'KUBECONFIG')]) {
+                        sh '''
+                            export KUBECONFIG=$KUBECONFIG
 
                             kubectl get nodes
                             kubectl set image deployment/taskapp-deployment \
                                 taskapp=${DOCKER_IMAGE}:${IMAGE_TAG} \
-                                -n ${K8S_NAMESPACE} \
-                                --record
+                                -n ${K8S_NAMESPACE}
 
                             kubectl rollout status deployment/taskapp-deployment \
-                                -n ${K8S_NAMESPACE} --timeout=300s
-                        """
+                                -n ${K8S_NAMESPACE}
+                        '''
                     }
                 }
             }
@@ -247,7 +252,13 @@ pipeline {
                 }
             }
 
-            sh 'docker system prune -f || true'
+            script {
+                try {
+                    sh 'docker system prune -f'
+                } catch (e) {
+                    echo "Docker cleanup skipped"
+                }
+            }
         }
     }
 }
