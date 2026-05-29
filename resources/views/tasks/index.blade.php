@@ -1,5 +1,5 @@
 @extends('layouts.base')
-@section('title', 'Sumit Tasks — TaskApp')
+@section('title', 'Sumit gitTasks — TaskApp')
 
 @section('content')
 @php
