@@ -21,7 +21,6 @@ pipeline {
         DOCKER_HUB_USER    = 'sumitpaltech'
         DOCKER_IMAGE       = "${DOCKER_HUB_USER}/${APP_NAME}"
         IMAGE_TAG          = "${env.GIT_COMMIT?.take(8) ?: 'latest'}-${env.BUILD_NUMBER}"
-        DOCKER_HUB_CREDS   = credentials('dockerhub-credentials')   // Jenkins credential ID
         KUBECONFIG_CREDS   = credentials('kubeconfig-credentials')   // Jenkins credential ID
         K8S_NAMESPACE      = "${env.BRANCH_NAME == 'main' ? 'production' : 'staging'}"
     }
@@ -153,30 +152,6 @@ pipeline {
         }
 
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        // Stage 8: Push to Docker Hub
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        stage('Push to Registry') {
-            when {
-                anyOf {
-                    branch 'main'
-                    branch 'dev'
-                }
-            }
-            steps {
-                echo '📤 Pushing image to Docker Hub...'
-                sh """
-                    echo \${DOCKER_HUB_CREDS_PSW} | docker login \
-                        -u \${DOCKER_HUB_CREDS_USR} --password-stdin
-
-                    docker push ${DOCKER_IMAGE}:${IMAGE_TAG}
-                    docker push ${DOCKER_IMAGE}:latest
-
-                    docker logout
-                """
-            }
-        }
-
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         // Stage 9: Deploy to Kubernetes
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         stage('Deploy to Staging') {
@@ -251,20 +226,14 @@ pipeline {
     post {
         success {
             echo '🎉 Pipeline completed successfully!'
-            // Uncomment to enable Slack notifications:
-            // slackSend channel: '#deployments',
-            //     color: 'good',
-            //     message: "✅ ${APP_NAME} ${IMAGE_TAG} deployed to ${K8S_NAMESPACE}"
         }
         failure {
             echo '❌ Pipeline failed!'
-            // slackSend channel: '#deployments',
-            //     color: 'danger',
-            //     message: "❌ ${APP_NAME} build ${env.BUILD_NUMBER} FAILED"
         }
         always {
-            cleanWs()
-            sh 'docker system prune -f || true'
+            script {
+                cleanWs()
+            }
         }
     }
 }
