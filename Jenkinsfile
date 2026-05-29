@@ -4,78 +4,146 @@ pipeline {
     environment {
         APP_NAME     = 'taskapp'
         DOCKER_IMAGE = "sumitpaltech/taskapp"
-        K8S_CREDS    = credentials('kubeconfig-credentials')
+        IMAGE_TAG    = "${env.GIT_COMMIT?.take(7)}-${env.BUILD_NUMBER}"
     }
 
     options {
         timeout(time: 30, unit: 'MINUTES')
-        timestamps()
         disableConcurrentBuilds()
+        timestamps()
     }
 
     stages {
 
         stage('Checkout') {
             steps {
+                echo "🔄 Checking out code..."
                 checkout scm
+
                 script {
-                    env.IMAGE_TAG = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+                    env.IMAGE_TAG = sh(
+                        script: "git rev-parse --short HEAD",
+                        returnStdout: true
+                    ).trim() + "-${env.BUILD_NUMBER}"
                 }
             }
         }
 
-        stage('Install Dependencies') {
+        stage('Setup Environment') {
             steps {
+                echo "📦 Setting up Laravel environment..."
+
                 sh '''
-                    if [ ! -f .env ]; then cp .env.example .env; fi
-                    composer install --no-interaction || true
+                    if [ -f .env.example ] && [ ! -f .env ]; then
+                        cp .env.example .env
+                    fi
+
+                    composer install --no-interaction --prefer-dist || true
                     php artisan key:generate || true
+                '''
+            }
+        }
+
+        stage('Lint') {
+            steps {
+                echo "🔍 Running lint checks..."
+
+                sh '''
+                    if [ -f ./vendor/bin/pint ]; then
+                        ./vendor/bin/pint --test || true
+                    fi
+
+                    find app config routes database -name "*.php" -print0 | xargs -0 -n1 php -l || true
                 '''
             }
         }
 
         stage('Test') {
             steps {
-                sh 'php artisan test || true'
+                echo "🧪 Running tests..."
+
+                sh '''
+                    php artisan test --parallel --log-junit results.xml || true
+                '''
             }
         }
 
         stage('Docker Build') {
             steps {
+                echo "🐳 Building Docker image..."
+
                 sh """
-                    docker build -t ${DOCKER_IMAGE}:${IMAGE_TAG} .
-                    docker tag ${DOCKER_IMAGE}:${IMAGE_TAG} ${DOCKER_IMAGE}:latest
+                    docker build \
+                        -t ${DOCKER_IMAGE}:${IMAGE_TAG} \
+                        -t ${DOCKER_IMAGE}:latest \
+                        .
                 """
             }
         }
 
         stage('Docker Push') {
             steps {
+                echo "📤 Pushing image to DockerHub..."
+
                 withCredentials([usernamePassword(
                     credentialsId: 'dockerhub-credentials',
-                    usernameVariable: 'USER',
-                    passwordVariable: 'PASS'
+                    usernameVariable: 'DOCKER_USER',
+                    passwordVariable: 'DOCKER_PASS'
                 )]) {
+
                     sh """
-                        echo $PASS | docker login -u $USER --password-stdin
+                        echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+
                         docker push ${DOCKER_IMAGE}:${IMAGE_TAG}
                         docker push ${DOCKER_IMAGE}:latest
+
                         docker logout
                     """
                 }
             }
         }
 
-        stage('Deploy') {
+        stage('Deploy to Staging') {
             steps {
-                withCredentials([file(credentialsId: 'kubeconfig-credentials', variable: 'KUBECONFIG')]) {
+                echo "🚀 Deploying to Kubernetes (staging)..."
+
+                withCredentials([file(credentialsId: 'kubeconfig.yaml (Minikube kubeconfig)', variable: 'KUBECONFIG')]) {
+
                     sh """
                         kubectl set image deployment/taskapp-deployment \
-                        taskapp=${DOCKER_IMAGE}:${IMAGE_TAG} \
-                        -n staging
+                            taskapp=${DOCKER_IMAGE}:${IMAGE_TAG} \
+                            -n staging
 
                         kubectl rollout status deployment/taskapp-deployment \
-                        -n staging --timeout=300s
+                            -n staging --timeout=300s
+                    """
+                }
+            }
+        }
+
+        stage('Approval (Production)') {
+            when { branch 'main' }
+            steps {
+                input message: "Deploy to PRODUCTION?", ok: "Deploy"
+            }
+        }
+
+        stage('Deploy to Production') {
+            when { branch 'main' }
+            steps {
+                echo "🚀 Deploying to production..."
+
+                withCredentials([file(credentialsId: 'kubeconfig.yaml (Minikube kubeconfig)', variable: 'KUBECONFIG')]) {
+
+                    sh """
+                        kubectl apply -f k8s/ -n production
+
+                        kubectl set image deployment/taskapp-deployment \
+                            taskapp=${DOCKER_IMAGE}:${IMAGE_TAG} \
+                            -n production
+
+                        kubectl rollout status deployment/taskapp-deployment \
+                            -n production --timeout=300s
                     """
                 }
             }
