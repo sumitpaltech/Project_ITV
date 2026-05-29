@@ -107,7 +107,7 @@ pipeline {
                 echo "🚀 Deploying to Kubernetes (staging)..."
 
                 withCredentials([file(
-                    credentialsId: 'Minikube kubeconfig',
+                    credentialsId: 'kubeconfig',
                     variable: 'KUBECONFIG'
                 )]) {
 
@@ -137,7 +137,7 @@ pipeline {
                 echo "🚀 Deploying to production..."
 
                 withCredentials([file(
-                    credentialsId: 'Minikube kubeconfig',
+                    credentialsId: 'kubeconfig',
                     variable: 'KUBECONFIG'
                 )]) {
 
