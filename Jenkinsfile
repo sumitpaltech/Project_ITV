@@ -21,6 +21,7 @@ pipeline {
         DOCKER_HUB_USER    = 'sumitpaltech'
         DOCKER_IMAGE       = "${DOCKER_HUB_USER}/${APP_NAME}"
         IMAGE_TAG          = "${env.GIT_COMMIT?.take(8) ?: 'latest'}-${env.BUILD_NUMBER}"
+        DOCKER_HUB_CREDS   = credentials('dockerhub-credentials')   // Jenkins credential ID
         KUBECONFIG_CREDS   = credentials('kubeconfig-credentials')   // Jenkins credential ID
         K8S_NAMESPACE      = "${env.BRANCH_NAME == 'main' ? 'production' : 'staging'}"
     }
@@ -57,22 +58,11 @@ pipeline {
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         stage('Install Dependencies') {
             steps {
-                echo '📦 Installing dependencies...'
+                echo '📦 Installing Composer dependencies...'
                 sh '''
-                    if [ -f composer.json ]; then
-                        if command -v composer >/dev/null 2>&1; then
-                            composer install --no-interaction --prefer-dist --optimize-autoloader
-                        else
-                            echo "❌ Composer not installed in Jenkins"
-                            exit 1
-                        fi
-                    fi
-
-                    if [ -f .env.example ]; then
-                        cp .env.example .env
-                    else
-                        echo "⚠️ .env.example not found, skipping"
-                    fi
+                    cp .env.example .env
+                    composer install --no-interaction --prefer-dist --optimize-autoloader
+                    php artisan key:generate
                 '''
             }
         }
@@ -132,15 +122,16 @@ pipeline {
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         stage('Docker Build') {
             steps {
-                script {
-                    if (sh(script: 'command -v docker', returnStatus: true) == 0) {
-                        sh """
-                            docker build -t ${DOCKER_IMAGE}:${IMAGE_TAG} .
-                        """
-                    } else {
-                        error "Docker not available in Jenkins"
-                    }
-                }
+                echo "🐳 Building image: ${DOCKER_IMAGE}:${IMAGE_TAG}"
+                sh """
+                    docker build \
+                        --build-arg BUILD_DATE=\$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+                        --build-arg VCS_REF=${env.GIT_COMMIT?.take(8) ?: 'unknown'} \
+                        --cache-from ${DOCKER_IMAGE}:latest \
+                        -t ${DOCKER_IMAGE}:${IMAGE_TAG} \
+                        -t ${DOCKER_IMAGE}:latest \
+                        -f Dockerfile .
+                """
             }
         }
 
@@ -162,26 +153,49 @@ pipeline {
         }
 
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // Stage 8: Push to Docker Hub
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        stage('Push to Registry') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'dev'
+                }
+            }
+            steps {
+                echo '📤 Pushing image to Docker Hub...'
+                sh """
+                    echo \${DOCKER_HUB_CREDS_PSW} | docker login \
+                        -u \${DOCKER_HUB_CREDS_USR} --password-stdin
+
+                    docker push ${DOCKER_IMAGE}:${IMAGE_TAG}
+                    docker push ${DOCKER_IMAGE}:latest
+
+                    docker logout
+                """
+            }
+        }
+
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         // Stage 9: Deploy to Kubernetes
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         stage('Deploy to Staging') {
             when { branch 'dev' }
             steps {
                 echo "🚀 Deploying ${IMAGE_TAG} to STAGING..."
-                withEnv(["KUBECONFIG=${env.WORKSPACE}/kubeconfig"]) {
-                    withCredentials([file(credentialsId: 'kubeconfig-credentials', variable: 'KUBECONFIG')]) {
-                        sh '''
-                            export KUBECONFIG=$KUBECONFIG
+                withCredentials([file(credentialsId: 'kubeconfig-credentials',
+                                     variable: 'KUBECONFIG')]) {
+                    sh """
+                        # Update image tag in deployment
+                        kubectl set image deployment/taskapp-deployment \
+                            taskapp=${DOCKER_IMAGE}:${IMAGE_TAG} \
+                            -n staging \
+                            --record
 
-                            kubectl get nodes
-                            kubectl set image deployment/taskapp-deployment \
-                                taskapp=${DOCKER_IMAGE}:${IMAGE_TAG} \
-                                -n ${K8S_NAMESPACE}
-
-                            kubectl rollout status deployment/taskapp-deployment \
-                                -n ${K8S_NAMESPACE}
-                        '''
-                    }
+                        # Wait for rollout to complete
+                        kubectl rollout status deployment/taskapp-deployment \
+                            -n staging --timeout=300s
+                    """
                 }
             }
         }
@@ -237,28 +251,20 @@ pipeline {
     post {
         success {
             echo '🎉 Pipeline completed successfully!'
+            // Uncomment to enable Slack notifications:
+            // slackSend channel: '#deployments',
+            //     color: 'good',
+            //     message: "✅ ${APP_NAME} ${IMAGE_TAG} deployed to ${K8S_NAMESPACE}"
         }
-
         failure {
             echo '❌ Pipeline failed!'
+            // slackSend channel: '#deployments',
+            //     color: 'danger',
+            //     message: "❌ ${APP_NAME} build ${env.BUILD_NUMBER} FAILED"
         }
-
         always {
-            script {
-                try {
-                    cleanWs()
-                } catch (e) {
-                    echo "Workspace already cleaned or not available"
-                }
-            }
-
-            script {
-                try {
-                    sh 'docker system prune -f'
-                } catch (e) {
-                    echo "Docker cleanup skipped"
-                }
-            }
+            cleanWs()
+            sh 'docker system prune -f || true'
         }
     }
 }
