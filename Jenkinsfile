@@ -226,14 +226,20 @@ pipeline {
     post {
         success {
             echo '🎉 Pipeline completed successfully!'
+            // Uncomment to enable Slack notifications:
+            // slackSend channel: '#deployments',
+            //     color: 'good',
+            //     message: "✅ ${APP_NAME} ${IMAGE_TAG} deployed to ${K8S_NAMESPACE}"
         }
         failure {
             echo '❌ Pipeline failed!'
+            // slackSend channel: '#deployments',
+            //     color: 'danger',
+            //     message: "❌ ${APP_NAME} build ${env.BUILD_NUMBER} FAILED"
         }
         always {
-            script {
-                cleanWs()
-            }
+            cleanWs()
+            sh 'docker system prune -f || true'
         }
     }
 }
