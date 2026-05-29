@@ -158,19 +158,21 @@ pipeline {
             when { branch 'dev' }
             steps {
                 echo "🚀 Deploying ${IMAGE_TAG} to STAGING..."
-                withCredentials([file(credentialsId: 'kubeconfig-credentials',
-                                     variable: 'KUBECONFIG')]) {
-                    sh """
-                        # Update image tag in deployment
-                        kubectl set image deployment/taskapp-deployment \
-                            taskapp=${DOCKER_IMAGE}:${IMAGE_TAG} \
-                            -n staging \
-                            --record
+                withEnv(["KUBECONFIG=${env.WORKSPACE}/kubeconfig"]) {
+                    withCredentials([file(credentialsId: 'kubeconfig-credentials', variable: 'KUBECONFIG_FILE')]) {
+                        sh """
+                            cp \$KUBECONFIG_FILE \$KUBECONFIG
 
-                        # Wait for rollout to complete
-                        kubectl rollout status deployment/taskapp-deployment \
-                            -n staging --timeout=300s
-                    """
+                            kubectl get nodes
+                            kubectl set image deployment/taskapp-deployment \
+                                taskapp=${DOCKER_IMAGE}:${IMAGE_TAG} \
+                                -n ${K8S_NAMESPACE} \
+                                --record
+
+                            kubectl rollout status deployment/taskapp-deployment \
+                                -n ${K8S_NAMESPACE} --timeout=300s
+                        """
+                    }
                 }
             }
         }
@@ -226,19 +228,21 @@ pipeline {
     post {
         success {
             echo '🎉 Pipeline completed successfully!'
-            // Uncomment to enable Slack notifications:
-            // slackSend channel: '#deployments',
-            //     color: 'good',
-            //     message: "✅ ${APP_NAME} ${IMAGE_TAG} deployed to ${K8S_NAMESPACE}"
         }
+
         failure {
             echo '❌ Pipeline failed!'
-            // slackSend channel: '#deployments',
-            //     color: 'danger',
-            //     message: "❌ ${APP_NAME} build ${env.BUILD_NUMBER} FAILED"
         }
+
         always {
-            cleanWs()
+            script {
+                try {
+                    cleanWs()
+                } catch (e) {
+                    echo "Workspace already cleaned or not available"
+                }
+            }
+
             sh 'docker system prune -f || true'
         }
     }
