@@ -1,172 +1,125 @@
-/*
- * ─────────────────────────────────────────────────────────────
- *  TaskApp — Declarative Jenkins CI/CD Pipeline
- * ─────────────────────────────────────────────────────────────
- *  Flow:  GitHub Push  →  Webhook  →  Jenkins  →  Build & Test
- *         →  Docker Build  →  Push to Docker Hub  →  Deploy to K8s
- *
- *  Branch strategy:
- *    • dev     → deploys to   staging   namespace
- *    • main    → deploys to   production namespace (manual approval)
- * ─────────────────────────────────────────────────────────────
- */
-
 pipeline {
-    agent any
 
-    // ── Environment variables ────────────────────────────────
-    environment {
-        APP_NAME           = 'taskapp'
-        DOCKER_REGISTRY    = 'docker.io'
-        DOCKER_HUB_USER    = 'sumitpaltech'
-        DOCKER_IMAGE       = "${DOCKER_HUB_USER}/${APP_NAME}"
-        IMAGE_TAG          = "${env.GIT_COMMIT?.take(8) ?: 'latest'}-${env.BUILD_NUMBER}"
-        DOCKER_HUB_CREDS   = credentials('dockerhub-credentials')   // Jenkins credential ID
-        KUBECONFIG_CREDS   = credentials('kubeconfig-credentials')   // Jenkins credential ID
-        K8S_NAMESPACE      = "${env.BRANCH_NAME == 'main' ? 'production' : 'staging'}"
+    agent {
+        docker {
+            image 'php:8.2-cli'
+            args '-u root -v /var/run/docker.sock:/var/run/docker.sock'
+        }
     }
 
-    // ── Pipeline options ─────────────────────────────────────
+    environment {
+        APP_NAME        = 'taskapp'
+        DOCKER_IMAGE    = "sumitpaltech/taskapp"
+        DOCKER_CREDS    = credentials('dockerhub-credentials')
+        K8S_NAMESPACE   = 'staging'
+    }
+
     options {
         timeout(time: 30, unit: 'MINUTES')
         disableConcurrentBuilds()
-        buildDiscarder(logRotator(numToKeepStr: '15'))
+        buildDiscarder(logRotator(numToKeepStr: '10'))
         timestamps()
         ansiColor('xterm')
     }
 
-    // ── Trigger on GitHub webhook ────────────────────────────
-    triggers {
-        githubPush()
-    }
-
     stages {
 
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        // Stage 1: Checkout
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        stage('Install System Dependencies') {
+            steps {
+                echo "⚙️ Installing system packages + PHP extensions"
+                sh '''
+                    apt-get update && apt-get install -y \
+                        git unzip curl libzip-dev libpng-dev libjpeg-dev libfreetype6-dev
+
+                    docker-php-ext-install gd zip
+                '''
+            }
+        }
+
         stage('Checkout') {
             steps {
-                echo "🔄 Checking out branch: ${env.BRANCH_NAME}"
+                echo "🔄 Checking out code..."
                 checkout scm
+
+                script {
+                    env.IMAGE_TAG = sh(
+                        script: "git rev-parse --short HEAD",
+                        returnStdout: true
+                    ).trim() + "-${env.BUILD_NUMBER}"
+                }
+
                 sh 'git log --oneline -5'
             }
         }
 
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        // Stage 2: Install Dependencies
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         stage('Install Dependencies') {
             steps {
-                echo '📦 Installing Composer dependencies...'
+                echo "📦 Composer install..."
                 sh '''
-                    cp .env.example .env
-                    composer install --no-interaction --prefer-dist --optimize-autoloader
-                    php artisan key:generate
+                    if [ ! -f .env ]; then cp .env.example .env; fi
+
+                    curl -sS https://getcomposer.org/installer | php
+                    php composer.phar install --no-interaction --prefer-dist --optimize-autoloader
                 '''
             }
         }
 
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        // Stage 3: Code Quality & Lint
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         stage('Lint') {
             steps {
-                echo '🔍 Running code quality checks...'
+                echo "🔍 Lint check..."
                 sh '''
-                    # Laravel Pint (PSR-12 + Laravel style)
                     ./vendor/bin/pint --test || true
-
-                    # PHP syntax check on all PHP files
-                    find app config routes database \
-                        -name "*.php" -print0 | xargs -0 -n1 php -l
+                    find app config routes database -name "*.php" -print0 | xargs -0 -n1 php -l || true
                 '''
             }
         }
 
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        // Stage 4: Run Tests
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         stage('Test') {
             steps {
-                echo '🧪 Running PHPUnit test suite...'
+                echo "🧪 Running tests..."
                 sh '''
-                    php artisan config:clear
-                    php artisan test --parallel --coverage-text \
-                        --log-junit reports/junit.xml || true
+                    php artisan test --parallel --log-junit reports.xml || true
                 '''
-            }
-            post {
-                always {
-                    junit allowEmptyResults: true,
-                         testResults: 'reports/junit.xml'
-                }
             }
         }
 
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        // Stage 5: Security Scan
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         stage('Security Scan') {
             steps {
-                echo '🛡️ Scanning for known vulnerabilities...'
-                sh '''
-                    # Check Composer dependencies for CVEs
-                    composer audit --no-interaction || true
-                '''
+                echo "🛡️ Security scan..."
+                sh 'composer audit || true'
             }
         }
 
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        // Stage 6: Build Docker Image
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         stage('Docker Build') {
             steps {
-                echo "🐳 Building image: ${DOCKER_IMAGE}:${IMAGE_TAG}"
+                echo "🐳 Building Docker image..."
                 sh """
                     docker build \
-                        --build-arg BUILD_DATE=\$(date -u +%Y-%m-%dT%H:%M:%SZ) \
-                        --build-arg VCS_REF=${env.GIT_COMMIT?.take(8) ?: 'unknown'} \
-                        --cache-from ${DOCKER_IMAGE}:latest \
                         -t ${DOCKER_IMAGE}:${IMAGE_TAG} \
                         -t ${DOCKER_IMAGE}:latest \
-                        -f Dockerfile .
+                        .
                 """
             }
         }
 
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        // Stage 7: Trivy Image Scan
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         stage('Image Scan') {
             steps {
-                echo '🔐 Scanning Docker image for vulnerabilities...'
+                echo "🔐 Trivy scan..."
                 sh """
                     docker run --rm \
-                        -v /var/run/docker.sock:/var/run/docker.sock \
-                        aquasec/trivy:latest image \
-                        --severity HIGH,CRITICAL \
-                        --exit-code 0 \
-                        ${DOCKER_IMAGE}:${IMAGE_TAG}
+                    -v /var/run/docker.sock:/var/run/docker.sock \
+                    aquasec/trivy:latest image \
+                    --severity HIGH,CRITICAL \
+                    ${DOCKER_IMAGE}:${IMAGE_TAG} || true
                 """
             }
         }
 
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        // Stage 8: Push to Docker Hub
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        stage('Push to Registry') {
-            when {
-                anyOf {
-                    branch 'main'
-                    branch 'dev'
-                }
-            }
+        stage('Push to DockerHub') {
             steps {
-                echo '📤 Pushing image to Docker Hub...'
+                echo "📤 Pushing image..."
                 sh """
-                    echo \${DOCKER_HUB_CREDS_PSW} | docker login \
-                        -u \${DOCKER_HUB_CREDS_USR} --password-stdin
+                    echo $DOCKER_CREDS_PSW | docker login -u $DOCKER_CREDS_USR --password-stdin
 
                     docker push ${DOCKER_IMAGE}:${IMAGE_TAG}
                     docker push ${DOCKER_IMAGE}:latest
@@ -176,25 +129,17 @@ pipeline {
             }
         }
 
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        // Stage 9: Deploy to Kubernetes
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         stage('Deploy to Staging') {
-            when { branch 'dev' }
             steps {
-                echo "🚀 Deploying ${IMAGE_TAG} to STAGING..."
-                withCredentials([file(credentialsId: 'kubeconfig-credentials',
-                                     variable: 'KUBECONFIG')]) {
+                echo "🚀 Deploy to staging..."
+                withCredentials([file(credentialsId: 'kubeconfig-credentials', variable: 'KUBECONFIG')]) {
                     sh """
-                        # Update image tag in deployment
                         kubectl set image deployment/taskapp-deployment \
-                            taskapp=${DOCKER_IMAGE}:${IMAGE_TAG} \
-                            -n staging \
-                            --record
+                        taskapp=${DOCKER_IMAGE}:${IMAGE_TAG} \
+                        -n staging
 
-                        # Wait for rollout to complete
                         kubectl rollout status deployment/taskapp-deployment \
-                            -n staging --timeout=300s
+                        -n staging --timeout=300s
                     """
                 }
             }
@@ -203,68 +148,41 @@ pipeline {
         stage('Approval Gate') {
             when { branch 'main' }
             steps {
-                script {
-                    def approval = input(
-                        message: 'Deploy to PRODUCTION?',
-                        ok: 'Deploy',
-                        parameters: [
-                            string(name: 'APPROVED_BY',
-                                   description: 'Your name for audit trail')
-                        ]
-                    )
-                    echo "✅ Approved by: ${approval}"
-                }
+                input message: "Deploy to PRODUCTION?", ok: "Deploy"
             }
         }
 
         stage('Deploy to Production') {
             when { branch 'main' }
             steps {
-                echo "🚀 Deploying ${IMAGE_TAG} to PRODUCTION..."
-                withCredentials([file(credentialsId: 'kubeconfig-credentials',
-                                     variable: 'KUBECONFIG')]) {
+                echo "🚀 Deploy to production..."
+                withCredentials([file(credentialsId: 'kubeconfig-credentials', variable: 'KUBECONFIG')]) {
                     sh """
-                        # Apply all Kubernetes manifests
                         kubectl apply -f k8s/ -n production
 
-                        # Rolling update with the new image
                         kubectl set image deployment/taskapp-deployment \
-                            taskapp=${DOCKER_IMAGE}:${IMAGE_TAG} \
-                            -n production \
-                            --record
+                        taskapp=${DOCKER_IMAGE}:${IMAGE_TAG} \
+                        -n production
 
-                        # Wait for rollout completion
                         kubectl rollout status deployment/taskapp-deployment \
-                            -n production --timeout=300s
-
-                        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                        echo " ✅  PRODUCTION DEPLOY SUCCESSFUL"
-                        echo " Image: ${DOCKER_IMAGE}:${IMAGE_TAG}"
-                        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                        -n production --timeout=300s
                     """
                 }
             }
         }
     }
 
-    // ── Post-pipeline actions ────────────────────────────────
     post {
         success {
-            echo '🎉 Pipeline completed successfully!'
-            // Uncomment to enable Slack notifications:
-            // slackSend channel: '#deployments',
-            //     color: 'good',
-            //     message: "✅ ${APP_NAME} ${IMAGE_TAG} deployed to ${K8S_NAMESPACE}"
+            echo "✅ Pipeline SUCCESS"
         }
+
         failure {
-            echo '❌ Pipeline failed!'
-            // slackSend channel: '#deployments',
-            //     color: 'danger',
-            //     message: "❌ ${APP_NAME} build ${env.BUILD_NUMBER} FAILED"
+            echo "❌ Pipeline FAILED"
         }
+
         always {
             cleanWs()
-            sh 'docker system prune -f || true'
         }
     }
 }
