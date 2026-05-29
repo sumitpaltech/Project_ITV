@@ -22,9 +22,8 @@ RUN composer install \
 FROM node:20-alpine AS frontend
 
 WORKDIR /app
-COPY package*.json ./
-RUN if [ -f package.json ]; then npm ci --production=false; fi
 COPY . .
+RUN if [ -f package.json ]; then npm ci --production=false; fi
 # Ensure public/build always exists so the COPY below never fails
 RUN mkdir -p /app/public/build && if [ -f vite.config.js ]; then npm run build; fi
 
