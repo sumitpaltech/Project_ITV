@@ -1,0 +1,96 @@
+###############################################################################
+# Monitoring Stack — Prometheus + Grafana (via Helm values)
+# Install: helm install monitoring prometheus-community/kube-prometheus-stack
+#          -n monitoring --create-namespace -f monitoring-values.yaml
+###############################################################################
+
+# ── Prometheus Configuration ─────────────────────────────────
+prometheus:
+  prometheusSpec:
+    retention: 15d
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 20Gi
+    additionalScrapeConfigs:
+      - job_name: 'taskapp-pods'
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: ['production', 'staging']
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            regex: taskapp
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            target_label: __address__
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+
+# ── Grafana Configuration ────────────────────────────────────
+grafana:
+  adminPassword: "CHANGE-ME-IN-PRODUCTION"
+  service:
+    type: NodePort
+    nodePort: 31000
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: 'taskapp'
+          folder: 'TaskApp'
+          type: file
+          disableDeletion: false
+          options:
+            path: /var/lib/grafana/dashboards/taskapp
+
+# ── Alert Rules ──────────────────────────────────────────────
+additionalPrometheusRulesMap:
+  taskapp-alerts:
+    groups:
+      - name: taskapp.rules
+        rules:
+          - alert: HighErrorRate
+            expr: |
+              sum(rate(nginx_http_requests_total{status=~"5.."}[5m]))
+              / sum(rate(nginx_http_requests_total[5m])) > 0.05
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "TaskApp error rate above 5%"
+              description: "{{ $value | humanizePercentage }} of requests are failing."
+
+          - alert: PodCrashLooping
+            expr: rate(kube_pod_container_status_restarts_total{namespace="production"}[15m]) > 0
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Pod {{ $labels.pod }} is crash-looping"
+
+          - alert: HighMemoryUsage
+            expr: |
+              container_memory_usage_bytes{namespace="production", container="taskapp"}
+              / container_spec_memory_limit_bytes > 0.9
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "TaskApp pod memory usage above 90%"
+
+          - alert: DeploymentReplicasMismatch
+            expr: |
+              kube_deployment_spec_replicas{namespace="production"}
+              != kube_deployment_status_ready_replicas{namespace="production"}
+            for: 10m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Deployment {{ $labels.deployment }} has replica mismatch"

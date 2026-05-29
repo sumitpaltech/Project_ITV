@@ -1,0 +1,103 @@
+###############################################################################
+# MySQL 8.0 — Deployment + Service
+# Database: schoo7c1_tasks  |  User: schoo7c1_3ideaWebsite
+###############################################################################
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mysql-secrets
+  namespace: production
+  labels:
+    app: mysql
+type: Opaque
+data:
+  # MYSQL_ROOT_PASSWORD=RootP@ss2026!
+  MYSQL_ROOT_PASSWORD: "Um9vdFBAc3MyMDI2IQ=="
+  # MYSQL_DATABASE=schoo7c1_tasks
+  MYSQL_DATABASE:      "c2Nob283YzFfdGFza3M="
+  # MYSQL_USER=schoo7c1_3ideaWebsite
+  MYSQL_USER:          "c2Nob283YzFfM2lkZWFXZWJzaXRl"
+  # MYSQL_PASSWORD=3!dea@#!2026db
+  MYSQL_PASSWORD:      "MyFkZWFAIyEyMDI2ZGI="
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql-deployment
+  namespace: production
+  labels:
+    app: mysql
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mysql
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8.0
+          args:
+            - --character-set-server=utf8mb4
+            - --collation-server=utf8mb4_unicode_ci
+          ports:
+            - containerPort: 3306
+          envFrom:
+            - secretRef:
+                name: mysql-secrets
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          volumeMounts:
+            - name: mysql-data
+              mountPath: /var/lib/mysql
+          startupProbe:
+            exec:
+              command: ["mysqladmin", "ping", "-h", "127.0.0.1", "--silent"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            exec:
+              command: ["mysqladmin", "ping", "-h", "127.0.0.1", "--silent"]
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - bash
+                - -c
+                - "mysql -h 127.0.0.1 -u$MYSQL_USER -p$MYSQL_PASSWORD -e 'SELECT 1' $MYSQL_DATABASE"
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+      volumes:
+        - name: mysql-data
+          persistentVolumeClaim:
+            claimName: mysql-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-service
+  namespace: production
+  labels:
+    app: mysql
+spec:
+  type: ClusterIP
+  selector:
+    app: mysql
+  ports:
+    - port: 3306
+      targetPort: 3306

@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: taskapp-service
+  namespace: production
+  labels:
+    app: taskapp
+spec:
+  type: ClusterIP
+  selector:
+    app: taskapp
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 80

@@ -1,0 +1,120 @@
+@extends('layouts.base')
+@section('title', 'New Task — TaskApp')
+
+@section('content')
+<div class="card border-0 shadow-sm mb-4" style="max-width:680px;">
+    <div class="card-body p-4">
+        <h5 class="fw-bold mb-3">Quick Import</h5>
+        <form action="{{ route('task.import') }}" method="POST" enctype="multipart/form-data">
+            @csrf
+            <div class="input-group">
+                <input type="file" name="file" class="form-control" accept=".xlsx,.xls,.csv" required>
+                <button class="btn btn-outline-secondary" type="submit"><i class="bi bi-file-earmark-excel me-1"></i>Upload Excel</button>
+            </div>
+            <div class="form-text mt-2">
+                Columns: title, description, category, department, assigned_to, team_member, user_mail, priority, start_date, due_date, completion_date, status, remarks
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="d-flex align-items-center mb-4 gap-3">
+    <a href="{{ route('task.index') }}" class="btn btn-light btn-sm"><i class="bi bi-arrow-left"></i></a>
+    <h4 class="mb-0 fw-bold">Create New Task</h4>
+</div>
+
+<div class="card border-0 shadow-sm" style="max-width:680px;">
+    <div class="card-body p-4">
+        <form action="{{ route('task.store') }}" method="POST">
+            @csrf
+            <div class="mb-3">
+                <label class="form-label fw-semibold">Title <span class="text-danger">*</span></label>
+                <input type="text" name="title" class="form-control" placeholder="Task title" required>
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label fw-semibold">Description</label>
+                <textarea name="description" class="form-control" rows="4" placeholder="Describe the task..."></textarea>
+            </div>
+
+            <div class="row g-3 mb-3">
+                <div class="col-md-6">
+                    <label class="form-label fw-semibold">Category</label>
+                    <input type="text" name="category" class="form-control" value="General">
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label fw-semibold">Department</label>
+                    <select name="department" class="form-select">
+                        <option value="">Select Department</option>
+                        @foreach($departments as $d)
+                            <option value="{{ $d }}" {{ $session_department === $d ? 'selected' : '' }}>{{ $d }}</option>
+                        @endforeach
+                    </select>
+                </div>
+            </div>
+
+            @if($session_role === 'admin')
+                <div class="row g-3 mb-3">
+                    <div class="col-md-6">
+                        <label class="form-label fw-semibold">Assigned To (username)</label>
+                        <input type="text" name="assigned_to" class="form-control" placeholder="username">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label fw-semibold">Assigned Email</label>
+                        <input type="email" name="user_mail" class="form-control" placeholder="user@example.com">
+                    </div>
+                </div>
+            @endif
+
+            <div class="mb-3">
+                <label class="form-label fw-semibold">Team Member</label>
+                <input type="text" name="team_member" class="form-control" placeholder="Team member name">
+            </div>
+
+            <div class="row g-3 mb-3">
+                <div class="col-md-4">
+                    <label class="form-label fw-semibold">Status</label>
+                    <select name="status" class="form-select">
+                        <option value="pending" selected>Pending</option>
+                        <option value="in_progress">In Progress</option>
+                        <option value="completed">Completed</option>
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label fw-semibold">Priority</label>
+                    <select name="priority" class="form-select">
+                        <option value="low">Low</option>
+                        <option value="medium" selected>Medium</option>
+                        <option value="high">High</option>
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label fw-semibold">Due Date</label>
+                    <input type="date" name="due_date" class="form-control">
+                </div>
+            </div>
+
+            <div class="row g-3 mb-3">
+                <div class="col-md-6">
+                    <label class="form-label fw-semibold">Start Date</label>
+                    <input type="date" name="start_date" class="form-control">
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label fw-semibold">Completion Date</label>
+                    <input type="date" name="completion_date" class="form-control">
+                </div>
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label fw-semibold">Remarks</label>
+                <textarea name="remarks" class="form-control" rows="3"></textarea>
+            </div>
+
+            <div class="d-flex gap-2 pt-2">
+                <button type="submit" class="btn btn-primary px-4 fw-semibold"><i class="bi bi-check-lg me-1"></i>Create Task</button>
+                <a href="{{ route('task.index') }}" class="btn btn-light px-4">Cancel</a>
+            </div>
+        </form>
+    </div>
+</div>
+@endsection
