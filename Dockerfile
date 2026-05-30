@@ -117,7 +117,8 @@ RUN mkdir -p \
 
 # Regenerate package discovery without dev deps (collision removed)
 # Dummy APP_KEY lets artisan bootstrap; real key is injected at runtime via k8s secret
-ENV APP_KEY="base64:YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE="
+ARG APP_KEY
+ENV APP_KEY=${APP_KEY}
 RUN rm -f bootstrap/cache/packages.php bootstrap/cache/services.php \
       bootstrap/cache/config.php bootstrap/cache/routes*.php \
     && find storage/framework/views -name "*.php" -delete 2>/dev/null || true \
