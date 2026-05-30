@@ -1,5 +1,5 @@
 @extends('layouts.base')
-@section('title', 'Kapil Tasks — TaskApp')
+@section('title', 'Tasks — TaskApp')
 
 @section('content')
 @php
