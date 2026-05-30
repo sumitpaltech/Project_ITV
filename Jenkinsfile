@@ -119,7 +119,6 @@ pipeline {
                         kubectl set image deployment/taskapp-deployment \
                             taskapp=${DOCKER_IMAGE}:${IMAGE_TAG} \
                             -n staging \
-                            --record
 
                         kubectl rollout status deployment/taskapp-deployment \
                             -n staging --timeout=300s
@@ -151,7 +150,6 @@ pipeline {
                         kubectl set image deployment/taskapp-deployment \
                             taskapp=${DOCKER_IMAGE}:${IMAGE_TAG} \
                             -n production \
-                            --record
 
                         kubectl rollout status deployment/taskapp-deployment \
                             -n production --timeout=300s
