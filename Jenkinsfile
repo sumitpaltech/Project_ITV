@@ -60,9 +60,12 @@ pipeline {
         stage('Test') {
             steps {
                 echo "🧪 Running tests..."
-
                 sh '''
-                    php artisan test --parallel --log-junit results.xml || true
+                    docker run --rm \
+                        -v $(pwd):/var/www/html \
+                        -w /var/www/html \
+                        php:8.2-cli \
+                        php artisan test --parallel --log-junit results.xml || true
                 '''
             }
         }
@@ -73,6 +76,7 @@ pipeline {
 
                 sh """
                     docker build \
+                        --build-arg APP_KEY=\$(openssl rand -base64 32) \
                         -t ${DOCKER_IMAGE}:${IMAGE_TAG} \
                         -t ${DOCKER_IMAGE}:latest \
                         .
